@@ -6,11 +6,9 @@
 $(document).ready(function(){
 	var from,to,subject,text;
 	$("#send_email").click(function(){		
-		to=$("#to").val();
-		subject=$("#subject").val();
-		text=$("#content").val();
+		to=$("#to").val();		
 		$("#message").text("Sending E-mail...Please wait");
-		$.get("http://localhost:3000/send",{to:to,subject:subject,text:text},function(data){
+		$.get("http://localhost:3000/send",{to:to},function(data){
 		if(data=="sent")
 		{
 			$("#message").empty().html("<p>Email is been sent at "+to+" . Please check inbox !</p>");
@@ -55,10 +53,8 @@ p
 </head>
 <body>
 <div id="container">
-<h1>Mailer In Node.JS</h1>
-<input type="text" id="to" placeholder="Enter E-mail ID where you want to send"><br>
-<input type="text" id="subject" placeholder="Write Subject"><br>
-<textarea id="content" rows="5" cols="40" placeholder="Write what you want to send"></textarea><br>
+<h1>Email-verification System in Node.js</h1>
+<input type="text" id="to" placeholder="Enter E-mail which you want to verify"><br>
 <button id="send_email">Send Email</button><br>
 <span id="message"></span>
 </div>
