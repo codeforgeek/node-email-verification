@@ -8,8 +8,8 @@ var app=express();
 var smtpTransport = nodemailer.createTransport("SMTP",{
     service: "Gmail",
     auth: {
-        user: "rwtc66@gmail.com",
-        pass: "0N>m,4K6 (S<+ga"
+        user: "",
+        pass: ""
     }
 });
 var rand,mailOptions,host,link;
