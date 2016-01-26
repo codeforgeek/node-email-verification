@@ -1,5 +1,127 @@
 # Changelog
 
+## 2.0.0 2016-01-11
+
+  * Released rc.2 as stable
+
+## 2.0.0-rc.2 2016-01-04
+
+  * Locked dependencies
+
+## 2.0.0-beta.2 2016-01-04
+
+  * Updated documentation to reflect changes with SMTP handling
+  * Use beta versions for smtp/pool/direct transports
+  * Updated logging
+
+## 2.0.0-beta.1 2016-01-03
+
+  * Use bunyan compatible logger instead of the emit('log') style
+  * Outsourced some reusable methods to nodemailer-shared
+  * Support setting direct/smtp/pool with the default configuration
+
+## 2.0.0-beta.0 2015-12-31
+
+  * Stream errors are not silently swallowed
+  * Do not use format=flowed
+  * Use nodemailer-fetch to fetch URL streams
+  * jshint replaced by eslint
+
+## v1.11.0 2015-12-28
+
+Allow connection url based SMTP configurations
+
+## v1.10.0 2015-11-13
+
+Added `defaults` argument for `createTransport` to predefine commonn values (eg. `from` address)
+
+## v1.9.0 2015-11-09
+
+Returns a Promise for `sendMail` if callback is not defined
+
+## v1.8.0 2015-10-08
+
+Added priority option (high, normal, low) for setting Importance header
+
+## v1.7.0 2015-10-06
+
+Replaced hyperquest with needle. Fixes issues with compressed data and redirects
+
+## v1.6.0 2015-10-05
+
+Maintenance release. Bumped dependencies to get support for unicode filenames for QQ webmail and to support emoji in filenames
+
+## v1.5.0 2015-09-24
+
+Use mailcomposer instead of built in solution to generate message sources. Bumped libmime gives better quoted-printable handling.
+
+## v1.4.0 2015-06-27
+
+Added new message option `watchHtml` to specify Apple Watch specific HTML part of the message. See [this post](https://litmus.com/blog/how-to-send-hidden-version-email-apple-watch) for details
+
+## v1.3.4 2015-04-25
+
+Maintenance release, bumped buildmail version to get fixed format=flowed handling
+
+## v1.3.3 2015-04-25
+
+Maintenance release, bumped dependencies
+
+## v1.3.2 2015-03-09
+
+Maintenance release, upgraded dependencies. Replaced simplesmtp based tests with smtp-server based ones.
+
+## v1.3.0 2014-09-12
+
+Maintenance release, upgrades buildmail and libmime. Allows using functions as transform plugins and fixes issue with unicode filenames in Gmail.
+
+## v1.2.2 2014-09-05
+
+Proper handling of data uris as attachments. Attachment `path` property can also be defined as a data uri, not just regular url or file path.
+
+## v1.2.1 2014-08-21
+
+Bumped libmime and mailbuild versions to properly handle filenames with spaces (short ascii only filenames with spaces were left unquoted).
+
+## v1.2.0 2014-08-18
+
+Allow using encoded strings as attachments. Added new property `encoding` which defines the encoding used for a `content` string. If encoding is set, the content value is converted to a Buffer value using the defined encoding before usage. Useful for including binary attachemnts in JSON formatted email objects.
+
+## v1.1.2 2014-08-18
+
+Return deprecatin error for v0.x style configuration
+
+## v1.1.1 2014-07-30
+
+Bumped nodemailer-direct-transport dependency. Updated version includes a bugfix for Stream nodes handling. Important only if use direct-transport with Streams (not file paths or urls) as attachment content.
+
+## v1.1.0 2014-07-29
+
+Added new method `resolveContent()` to get the html/text/attachment content as a String or Buffer.
+
+## v1.0.4 2014-07-23
+
+Bugfix release. HTML node was instered twice if the message consisted of a HTML
+content (but no text content) + at least one attachment with CID + at least
+one attachment without CID. In this case the HTML node was inserted both to
+the root level multipart/mixed section and to the multipart/related sub section
+
+## v1.0.3 2014-07-16
+
+Fixed a bug where Nodemailer crashed if the message content type was multipart/related
+
+## v1.0.2 2014-07-16
+
+Upgraded nodemailer-smtp-transport to 0.1.11. The docs state that for SSL you should use 'secure' option but the underlying smtp-connection module used 'secureConnection' for this purpose. Fixed smpt-connection to match the docs.
+
+## v1.0.1 2014-07-15
+
+Implemented missing #close method that is passed to the underlying transport object. Required by the smtp pool.
+
+## v1.0.0 2014-07-15
+
+Total rewrite. See migration guide here: http://www.andrisreinman.com/nodemailer-v1-0/#migrationguide
+
 ## v0.7.1 2014-07-09
 
   * Upgraded aws-sdk to 2.0.5
