@@ -1,438 +1,229 @@
-"use strict";
+'use strict';
 
-var transportHandler = require("./transport"),
-    Transport = transportHandler.Transport,
-    MailComposer = require("mailcomposer").MailComposer,
-    XOAuthGenerator = require("./xoauth").XOAuthGenerator,
-    helpers = require("./helpers"),
-    crypto = require("crypto"),
-    os = require("os"),
-    net = require("net"),
-    packageData = require("../package.json"),
-    publicAddress = require("public-address");
-
-/*
- * Version constants
- */
-var X_MAILER_NAME = "Nodemailer",
-    X_MAILER_HOMEPAGE = packageData.homepage;
-
-module.exports.X_MAILER_NAME = X_MAILER_NAME;
-module.exports.X_MAILER_HOMEPAGE = X_MAILER_HOMEPAGE;
+var mailcomposer = require('mailcomposer');
+var EventEmitter = require('events').EventEmitter;
+var util = require('util');
+var shared = require('nodemailer-shared');
+var directTransport = require('nodemailer-direct-transport');
+var smtpTransport = require('nodemailer-smtp-transport');
+var smtpPoolTransport = require('nodemailer-smtp-pool');
+var packageData = require('../package.json');
 
 // Export createTransport method
-module.exports.createTransport = function(type, options){
-    var transport = new Transport(type, options);
+module.exports.createTransport = function (transporter, defaults) {
+    var urlConfig;
+    var options;
 
-    transport.sendMail = function(options, callback){
-        options = options || {};
-        options.transport = options.transport || transport;
-        sendMail(options, callback);
-    };
-
-    return transport;
-};
-
-//Export createXOAuthGenerator function
-module.exports.createXOAuthGenerator = function(options){
-    return new XOAuthGenerator(options);
-};
-
-// exports mail generator
-Object.defineProperty(module.exports, "mail", {
-    get: function(){
-        var transport = module.exports.createTransport("direct");
-        return function(mailData){
-            transport.sendMail(mailData);
-        };
-    }
-});
-
-// Export Transport constructor
-module.exports.Transport = Transport;
-
-// Export Nodemailer constructor
-module.exports.Nodemailer = Nodemailer;
-
-// Export sendMail function (and the alias send_mail for legacy)
-module.exports.sendMail = module.exports.send_mail = sendMail;
-
-function sendMail(options, callback){
-    var mailer = new Nodemailer(options);
-    mailer.validateSettings(function(err){
-        if(err){
-            // report validation error back to the client
-            return callback(err);
-        }else{
-            // try to send the e-mail message
-            mailer.sendMail(callback);
-        }
+    // if no transporter configuration is provided use direct as default
+    transporter = transporter || directTransport({
+        debug: true
     });
 
-    return mailer;
-}
+    if (
+        // provided transporter is a configuration object, not transporter plugin
+        (typeof transporter === 'object' && typeof transporter.send !== 'function') ||
+        // provided transporter looks like a connection url
+        (typeof transporter === 'string' && /^(smtps?|direct):/i.test(transporter))
+    ) {
 
+        if ((urlConfig = typeof transporter === 'string' ? transporter : transporter.url)) {
+            // parse a configuration URL into configuration options
+            options = shared.parseConnectionUrl(urlConfig);
+        } else {
+            options = transporter;
+        }
+
+        if (options.direct) {
+            transporter = directTransport(options);
+        } else if (options.pool) {
+            transporter = smtpPoolTransport(options);
+        } else {
+            transporter = smtpTransport(options);
+        }
+    }
+
+    return new Nodemailer(transporter, defaults);
+};
 
 /**
- * <p>Generates a Nodemailer object which is the main 'hub' for managing the
- * send process</p>
+ * Creates an object for exposing the Nodemailer API
  *
  * @constructor
- * @param {Object} options Message options object, see README for the complete list of possible options
+ * @param {Object} transporter Transport object instance to pass the mails to
  */
-function Nodemailer(options){
-    var mailcomposerOptions = {};
+function Nodemailer(transporter, defaults) {
+    EventEmitter.call(this);
 
-    this.options = options || {};
+    this._defaults = defaults || {};
 
-    this.transport = this.options.transport;
+    this._plugins = {
+        compile: [],
+        stream: []
+    };
 
-    mailcomposerOptions.identityString = X_MAILER_NAME + " " + packageData.version;
+    this.transporter = transporter;
+    this.logger = this.transporter.logger || shared.getLogger({
+        logger: false
+    });
 
-    if(this.options.identityString){
-        mailcomposerOptions.identityString = this.options.identityString;
-    }
-
-    if(this.options.encoding){
-        mailcomposerOptions.encoding = this.options.encoding;
-    }
-
-    if(this.options.charset){
-        mailcomposerOptions.charset = this.options.charset;
-    }
-
-    if(!!this.options.forceEmbeddedImages){
-        mailcomposerOptions.forceEmbeddedImages = true;
-    }
-
-    this.mailcomposer = new MailComposer(mailcomposerOptions);
-
-    if(!this.transport){
-        this.transport = this.getGlobalTransport();
+    if (typeof transporter.on === 'function') {
+        this.transporter.on('log', function (log) {
+            this.logger.debug('%s: %s', log.type, log.message);
+        }.bind(this));
+        this.transporter.on('error', function (err) {
+            this.logger.error('Transport Error: %s', err.message);
+            this.emit('error', err);
+        }.bind(this));
     }
 }
+util.inherits(Nodemailer, EventEmitter);
+
+Nodemailer.prototype.use = function (step, plugin) {
+    step = (step || '').toString();
+    if (!this._plugins.hasOwnProperty(step)) {
+        this._plugins[step] = [plugin];
+    } else {
+        this._plugins[step].push(plugin);
+    }
+};
 
 /**
- * <p>Generates an user agent string for Nodemailer with homepage, version etc.</p>
+ * Optional close method, passed to the underlying transport object
+ */
+Nodemailer.prototype.close = function ( /* possible arguments */ ) {
+    var args = Array.prototype.slice.call(arguments);
+    if (typeof this.transporter.close === 'function') {
+        this.transporter.close.apply(this.transporter, args);
+    }
+};
+
+/**
+ * Sends an email using the preselected transport object
  *
- * @return {String} user agent string for X-Mailer value
+ * @param {Object} data E-data description
+ * @param {Function} callback Callback to run once the sending succeeded or failed
  */
-Nodemailer.prototype.generateUserAgentString = function(){
-    var details = [];
+Nodemailer.prototype.sendMail = function (data, callback) {
+    var promise;
 
-    if(packageData.version){
-        details.push(packageData.version);
+    if (!callback && typeof Promise === 'function') {
+        promise = new Promise(function (resolve, reject) {
+            callback = shared.callbackPromise(resolve, reject);
+        });
     }
 
-    if(X_MAILER_HOMEPAGE){
-        details.push("+"+X_MAILER_HOMEPAGE);
-    }
+    data = data || {};
+    data.headers = data.headers || {};
+    callback = callback || function () {};
 
-    if(this.transport){
-        details.push((this.transport.transportType || "").toLowerCase() +
-            (this.transport.version ? "/" + this.transport.version : ""));
-    }
-
-    return X_MAILER_NAME+ (details.length?" ("+details.join("; ")+")":"");
-};
-
-/**
- * <p>Add support for legacy transport settings by checking for global
- * variables SMTP, sendmail and SES</p>
- *
- * @return {Object} {@link Transport} object
- */
-Nodemailer.prototype.getGlobalTransport = function(){
-    if(this.options.SMTP){
-        // cache the transport for SMTP as it is actually a connection pool
-        if(!this.options.SMTP._smtp_transport){
-            this.options.SMTP._smtp_transport = new Transport("SMTP", this.options.SMTP);
+    // apply defaults
+    Object.keys(this._defaults).forEach(function (key) {
+        if (!(key in data)) {
+            data[key] = this._defaults[key];
+        } else if (key === 'headers') {
+            // headers is a special case. Allow setting individual default headers
+            Object.keys(this._defaults.headers || {}).forEach(function (key) {
+                if (!(key in data.headers)) {
+                    data.headers[key] = this._defaults.headers[key];
+                }
+            }.bind(this));
         }
-        return this.options.SMTP._smtp_transport;
-    }else if(this.options.sendmail){
-        return new Transport("sendmail", this.options.sendmail);
-    }else if(this.options.SES){
-        return new Transport("SES", this.options.SES);
-    }else if(module.exports.SMTP){
-        // cache the transport for SMTP as it is actually a connection pool
-        if(!module.exports._smtp_transport){
-            module.exports._smtp_transport = new Transport("SMTP", module.exports.SMTP);
-        }
-        return module.exports._smtp_transport;
-    }else if(module.exports.sendmail){
-        return new Transport("sendmail", module.exports.sendmail);
-    }else if(module.exports.SES){
-        return new Transport("SES", module.exports.SES);
-    }
-    return false;
-};
+    }.bind(this));
 
-/**
- * <p>Doesn't do much currently, if the future should link to transport
- * validation methods. For example in case of SES should check that AWS
- * keys are set up etc.</p>
- *
- * @param {Function} callback Callback function to run after validation
- */
-Nodemailer.prototype.validateSettings = function(callback){
-    var self = this;
-    process.nextTick(function(){
-        if(!self.transport || !self.transport.transport){
-            return callback(new Error("No transport method defined"));
+    var mail = {
+        data: data,
+        message: null,
+        resolveContent: shared.resolveContent
+    };
+
+    if (typeof this.transporter === 'string') {
+        return callback(new Error('Unsupported configuration, downgrade Nodemailer to v0.7.1 to use it'));
+    }
+
+    this.logger.info('Sending mail using %s/%s', this.transporter.name, this.transporter.version);
+
+    this._processPlugins('compile', mail, function (err) {
+        if (err) {
+            this.logger.error('PluginCompile Error: %s', err.message);
+            return callback(err);
         }
 
-        // transport.options.resolveHostname is set to true, resolve pulbic
-        // hostname for the machine and use self when generating Message-ID values
-        // or when communicating with SMTP
-        if(self.transport.options && self.transport.options.resolveHostname && !self.transport.options.name){
-            return publicHostnameResolver.resolve((function(err, resolved){
-                self.transport.options.name = self.resolveHostname(
-                    resolved ? resolved.hostname : self.options.name);
-                callback();
-            }).bind(self));
+        mail.message = mailcomposer(mail.data);
+
+        if (mail.data.xMailer !== false) {
+            mail.message.setHeader('X-Mailer', mail.data.xMailer || this._getVersionString());
         }
 
-        callback(null);
-    });
-};
-
-/**
- * <p>Send the e-mail message by using data from the original options object
- * and selected transport</p>
- *
- * @param {Function} callback Callback function to run when the e-mail has been sent (or it failed)
- */
-Nodemailer.prototype.sendMail = function(callback){
-    // compose the e-mail
-    this.generateMailObject();
-    // send the message using preselected transport method
-    this.transport.sendMailWithTransport(this.mailcomposer, callback);
-};
-
-/**
- * <p>Uses the data from the original options object to compose a mailcomposer
- * e-mail message that can be later streamed to the selected transport</p>
- */
-Nodemailer.prototype.generateMailObject = function(){
-
-    // set envelope data, subject etc.
-    this.setGeneralOptions();
-
-    // set module defined headers (date, message-id, etc.)
-    this.setModuleHeaders();
-
-    // set user defined headers (if any)
-    this.setUserHeaders();
-
-    // set alternatives (if any)
-    this.setAlternatives();
-
-    // set attachments (if any)
-    this.setAttachments();
-
-    // setup dsn
-    if(this.options.dsn){
-        this.mailcomposer.options.dsn = this.options.dsn;
-    }
-};
-
-/**
- * <p>Uses the general options (message sender and receiver, subject body, etc.)
- * to set mailcomposer properties. Includes support for legacy properties.</p>
- */
-Nodemailer.prototype.setGeneralOptions = function(){
-
-    // generate plaintext if only HTML exists and generateTextFromHTML is true
-    if(!(this.options.text || this.options.body) && (this.options.html) &&
-      this.options.generateTextFromHTML){
-        this.options.text = helpers.stripHTML(this.options.html);
-    }
-
-    var acceptedFields = ["from", "sender", "to", "subject", "replyTo", "debug",
-                          "reply_to", "cc", "bcc", "body", "text", "html",
-                          "envelope", "inReplyTo", "references"],
-        mailOptions = {},
-        keys = Object.keys(this.options),
-        key;
-
-    for(var i=0, len=keys.length; i<len; i++){
-        key = keys[i];
-        if(acceptedFields.indexOf(key) >=0 && this.options[key]){
-            mailOptions[key] = this.options[key];
-        }
-    }
-
-    if(this.options.debug){
-        console.log(mailOptions);
-    }
-
-    this.mailcomposer.setMessageOption(mailOptions);
-};
-
-/**
- * <p>If the 'headers' property was set on the options, add the values to the
- * header of the e-mail message</p>
- */
-Nodemailer.prototype.setUserHeaders = function(){
-    if(typeof this.options.headers != "object"){
-        return;
-    }
-    var keys = Object.keys(this.options.headers),
-        key;
-
-    for(var i=0, len=keys.length; i<len; i++){
-        key = keys[i];
-        if(this.options.headers[key]){
-            this.mailcomposer.addHeader(key, this.options.headers[key], true);
-        }
-    }
-};
-
-/**
- * <p>Add some required headers to the message, such as Date: and Message-Id:</p>
- */
-Nodemailer.prototype.setModuleHeaders = function(){
-    var messageId,
-        transportOptions = this.transport &&
-            this.transport.options &&
-            typeof this.transport.options == "object" &&
-            this.transport.options || {};
-
-    // Mailer name + version
-    // if xMailer is explicitly set to false, skip the X-Mailer header
-    if(transportOptions.xMailer !== false){
-        this.mailcomposer.addHeader("X-Mailer",
-            transportOptions.xMailer || this.generateUserAgentString());
-    }
-
-    // Date
-    if(this.options.date){
-        this.mailcomposer.addHeader("Date", this.options.date);
-    }else{
-        this.mailcomposer.addHeader("Date", new Date().toUTCString());
-    }
-
-    // Message ID
-    if(this.options.messageId){
-        messageId = this.options.messageId;
-    }else if(this.options.messageId !== false){
-        messageId = crypto.randomBytes(15).toString("hex") +"@"+ this.resolveHostname(this.options.name || transportOptions.name);
-    }
-
-    if(messageId){
-        this.mailcomposer.addHeader("Message-Id", "<"+messageId+">");
-        this.mailcomposer._messageId = messageId;
-    }
-
-};
-
-/**
- * <p>If attachment array is set on the options object, add these alternatives
- * to the mailcomposer object</p>
- */
-Nodemailer.prototype.setAlternatives = function(){
-    var alternative;
-
-    if(!this.options.alternatives){
-        return;
-    }
-
-    // convert non array value to an array if needed
-    this.options.alternatives = [].concat(this.options.alternatives);
-
-    for(var i=0, len=this.options.alternatives.length; i<len; i++){
-        alternative = this.options.alternatives[i];
-        this.mailcomposer.addAlternative(alternative);
-    }
-};
-
-/**
- * <p>If attachment array is set on the options object, add these attachments
- * to the mailcomposer object</p>
- */
-Nodemailer.prototype.setAttachments = function(){
-    var attachment;
-
-    if(!this.options.attachments){
-        return;
-    }
-
-    // convert non array value to an array if needed
-    this.options.attachments = [].concat(this.options.attachments);
-
-    for(var i=0, len=this.options.attachments.length; i<len; i++){
-        attachment = this.options.attachments[i];
-        attachment.userAgent = attachment.userAgent || this.generateUserAgentString();
-        this.mailcomposer.addAttachment(attachment);
-    }
-};
-
-/**
- * Resolves hostname, prefers given argument. If resolved
- * name is an IP address, "localhost" is used
- *
- * @param {String} [name] Preferred hostname
- * @return {String} Resolved hostname
- */
-Nodemailer.prototype.resolveHostname = function(name){
-    if(name === true){
-        name = false;
-    }
-
-    if(!name || net.isIP(name.replace(/[\[\]]/g, "").trim())){
-        name = (os.hostname && os.hostname()) || "";
-    }
-
-    if(!name || net.isIP(name.replace(/[\[\]]/g, "").trim())){
-        name = "localhost";
-    }
-
-    return name.toLowerCase();
-};
-
-/**
- * Interface for resolving public hostname for the current machine
- * Resolves the hostname only once and uses the cached value later on
- */
-var publicHostnameResolver = {
-
-    _callbacks: [],
-    _resolving: false,
-    _resolved: false,
-
-    /**
-     * Resolve hostname for the current machine
-     *
-     * @param {Function} callback Function with an error object and resolved data as arguments
-     */
-    resolve: function(callback){
-        if(this._resolved){
-            return callback(null, this._resolved);
+        if (mail.data.priority) {
+            switch ((mail.data.priority || '').toString().toLowerCase()) {
+                case 'high':
+                    mail.message.setHeader('X-Priority', '1 (Highest)');
+                    mail.message.setHeader('X-MSMail-Priority', 'High');
+                    mail.message.setHeader('Importance', 'High');
+                    break;
+                case 'low':
+                    mail.message.setHeader('X-Priority', '5 (Lowest)');
+                    mail.message.setHeader('X-MSMail-Priority', 'Low');
+                    mail.message.setHeader('Importance', 'Low');
+                    break;
+                default:
+                    // do not add anything, since all messages are 'Normal' by default
+            }
         }
 
-        this._callbacks.push(callback);
+        this._processPlugins('stream', mail, function (err) {
+            if (err) {
+                this.logger.error('PluginStream Error: %s', err.message);
+                return callback(err);
+            }
 
-        if(!this._resolving){
-            this._startResolving();
-        }
-    },
+            this.transporter.send(mail, function () {
+                var args = Array.prototype.slice.call(arguments);
+                if (args[0]) {
+                    this.logger.error('Send Error: %s', args[0].message);
+                }
+                callback.apply(null, args);
+            }.bind(this));
+        }.bind(this));
+    }.bind(this));
 
-    /**
-     * Initiate hostname resolving
-     */
-    _startResolving: function(){
-        this._resolving = true;
+    return promise;
+};
 
-        publicAddress((function(err, data){
-            this._resolving = false;
+Nodemailer.prototype._getVersionString = function () {
+    return util.format(
+        '%s (%s; +%s; %s/%s)',
+        packageData.name,
+        packageData.version,
+        packageData.homepage,
+        this.transporter.name,
+        this.transporter.version
+    );
+};
 
-            // if the resolving failed, skip it
-            this._resolved = data || {};
+Nodemailer.prototype._processPlugins = function (step, mail, callback) {
+    step = (step || '').toString();
 
-            // emit all queued callbacks
-            this._callbacks.forEach((function(callback){
-                callback(null, this._resolved);
-            }).bind(this));
-        }).bind(this));
+    if (!this._plugins.hasOwnProperty(step) || !this._plugins[step].length) {
+        return callback(null);
     }
+
+    var plugins = Array.prototype.slice.call(this._plugins[step]);
+
+    this.logger.debug('Using %s plugins for %s', plugins.length, step);
+
+    var processPlugins = function () {
+        if (!plugins.length) {
+            return callback(null);
+        }
+        var plugin = plugins.shift();
+        plugin(mail, function (err) {
+            if (err) {
+                return callback(err);
+            }
+            processPlugins();
+        });
+    }.bind(this);
+
+    processPlugins();
 };
