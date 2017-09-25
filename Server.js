@@ -5,7 +5,7 @@ var app=express();
 	Here we are configuring our SMTP Server details.
 	STMP is mail server which is responsible for sending and recieving email.
 */
-var smtpTransport = nodemailer.createTransport("SMTP",{
+var smtpTransport = nodemailer.createTransport({
     service: "Gmail",
     auth: {
         user: "",
